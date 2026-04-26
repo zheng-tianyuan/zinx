@@ -1,0 +1,35 @@
+{
+  "name": "zinx",
+  "version": "0.1.0",
+  "description": "A runtime-agnostic multi-agent SDK for chat, task orchestration, tool events, and memory providers.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "keywords": [
+    "agent",
+    "runtime",
+    "sdk",
+    "opencode",
+    "cursor",
+    "codex",
+    "memory"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}

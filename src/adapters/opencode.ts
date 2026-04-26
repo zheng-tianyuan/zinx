@@ -120,6 +120,8 @@ export class OpenCodeRuntimeAdapter implements RuntimeAdapter<OpenCodeMessage, O
       sessionListing: true,
       taskCancellation: false,
       nativeMemoryIntegration: true,
+      nativeSkillIntegration: true,
+      nativeMcpIntegration: true,
     };
   }
 

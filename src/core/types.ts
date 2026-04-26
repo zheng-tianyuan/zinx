@@ -79,6 +79,8 @@ export type MemoryRecallEvidence = {
   raw?: unknown;
 };
 
+export type MemoryMode = 'auto' | 'explicit' | 'native' | 'off';
+
 export type AgentEvent =
   | { type: 'session_bound'; binding: SessionBinding }
   | { type: 'log'; message: string }
@@ -99,6 +101,13 @@ export interface RuntimeAdapter<TRawMessage = unknown, TRawTask = unknown> {
   listMessages(args: { sessionId: string }): Promise<TRawMessage[]>;
   extractToolSnapshots(messages: TRawMessage[]): ToolCallSnapshot[];
   buildResult(args: { task: TaskHandle<TRawTask>; messages: TRawMessage[] }): RuntimeTaskResult;
+  readNativeMemoryEvidence?(args: {
+    sessionId: string;
+    task: TaskHandle<TRawTask>;
+    messages: TRawMessage[];
+    query: string;
+    startedAt: number;
+  }): Promise<MemoryRecallEvidence | null>;
   cancelTask?(args: { sessionId: string; taskId: string }): Promise<void>;
 }
 

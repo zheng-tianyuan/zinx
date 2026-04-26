@@ -1,4 +1,5 @@
 import type {
+  MemoryRecallEvidence,
   RuntimeAdapter,
   RuntimeCapabilities,
   RuntimeSession,
@@ -39,6 +40,13 @@ export type OpenCodeAdapterConfig = {
   defaultModelId?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  readNativeMemoryEvidence?: (args: {
+    sessionId: string;
+    taskId: string;
+    query: string;
+    startedAt: number;
+    messages: OpenCodeMessage[];
+  }) => Promise<MemoryRecallEvidence | null>;
 };
 
 function buildUrl(baseUrl: string, pathname: string, directory: string): string {
@@ -229,6 +237,23 @@ export class OpenCodeRuntimeAdapter implements RuntimeAdapter<OpenCodeMessage, O
           output: normalizeToolOutput(part.state?.output),
         }))),
     };
+  }
+
+  async readNativeMemoryEvidence(args: {
+    sessionId: string;
+    task: TaskHandle<OpenCodeTaskRaw>;
+    messages: OpenCodeMessage[];
+    query: string;
+    startedAt: number;
+  }): Promise<MemoryRecallEvidence | null> {
+    if (!this.config.readNativeMemoryEvidence) return null;
+    return this.config.readNativeMemoryEvidence({
+      sessionId: args.sessionId,
+      taskId: args.task.id,
+      query: args.query,
+      startedAt: args.startedAt,
+      messages: args.messages,
+    });
   }
 
   async runTaskOnce(args: {

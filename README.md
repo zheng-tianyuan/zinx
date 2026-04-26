@@ -11,7 +11,7 @@ It is designed around two layers:
 
 Different coding agents expose different session models, message shapes, tool logs, and streaming behavior. `zinx` keeps those differences behind adapters so product code can consume one event stream.
 
-Memory is intentionally handled as a sidecar provider. The orchestrator can explicitly recall memories before a task and inject them into the prompt, while runtimes with native memory plugins can still expose their own evidence through adapter capabilities.
+Memory is intentionally handled as a sidecar provider. The orchestrator supports both explicit SDK recall and native runtime memory plugins, so portable runtimes can use prompt injection while runtimes such as OpenCode can use a faster plugin path.
 
 ## Install
 
@@ -67,6 +67,32 @@ const memoryProvider = new OpenVikingMemoryProvider({
 ```
 
 The orchestrator calls `memoryProvider.recall()` before sending a task to the runtime. Recalled memories are emitted as a `memory_recalled` event and passed into the prompt builder.
+
+## Memory Modes
+
+`zinx` supports four memory modes:
+
+- `auto`: use native runtime memory when the adapter can provide evidence, otherwise fall back to explicit SDK recall.
+- `explicit`: call `MemoryProvider.recall()` before the task and inject memories into the prompt.
+- `native`: rely on the runtime's native memory integration, such as an agent plugin.
+- `off`: do not use memory.
+
+```ts
+for await (const event of streamChatTurn({
+  question: 'What should I check first for this alert?',
+  adapter,
+  store,
+  memory: {
+    mode: 'auto',
+    provider: memoryProvider,
+    recallLimit: 8,
+  },
+})) {
+  console.log(event);
+}
+```
+
+For native memory evidence, adapters can implement `readNativeMemoryEvidence()`. The OpenCode adapter accepts a `readNativeMemoryEvidence` callback so applications can bridge their own plugin state or logs without coupling `zinx` to a specific local file layout.
 
 ## Core Events
 

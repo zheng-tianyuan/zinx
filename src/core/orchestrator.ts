@@ -2,6 +2,7 @@ import type {
   AgentEvent,
   AgentRuntimeKind,
   ChatStore,
+  MemoryMode,
   MemoryProvider,
   MemoryRecallEvidence,
   RuntimeAdapter,
@@ -69,6 +70,18 @@ function diffToolEvents(args: {
   return events;
 }
 
+function resolveMemoryMode(args: {
+  mode: MemoryMode;
+  hasProvider: boolean;
+  hasNativeEvidenceReader: boolean;
+  supportsNativeMemory: boolean;
+}): MemoryMode {
+  if (args.mode !== 'auto') return args.mode;
+  if (args.supportsNativeMemory && args.hasNativeEvidenceReader) return 'native';
+  if (args.hasProvider) return 'explicit';
+  return 'off';
+}
+
 export function defaultPromptBuilder(args: {
   question: string;
   memories: MemoryRecallEvidence | null;
@@ -98,6 +111,12 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
   store: ChatStore;
   modelId?: string;
   memoryProvider?: MemoryProvider;
+  memory?: {
+    mode?: MemoryMode;
+    provider?: MemoryProvider;
+    recallLimit?: number;
+    targetUri?: string;
+  };
   chatSessionId?: string;
   requestedRuntimeSessionId?: string;
   title?: string;
@@ -133,6 +152,7 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
     const runtimeSession = runtimeSessionId
       ? await args.adapter.resumeSession({ sessionId: runtimeSessionId })
       : await args.adapter.createSession({ title: args.title || args.question, metadata: args.metadata });
+    const memoryProvider = args.memory?.provider || args.memoryProvider;
 
     let binding = makeBinding({
       chatSessionId: session.id,
@@ -142,8 +162,8 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
       memorySessionId: existingBinding?.memorySessionId,
     });
 
-    if (args.memoryProvider) {
-      binding = await args.memoryProvider.bindSession(binding);
+    if (memoryProvider) {
+      binding = await memoryProvider.bindSession(binding);
     }
 
     await args.store.updateBinding({
@@ -163,11 +183,24 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
         : `Created runtime session ${runtimeSession.id}`,
     };
 
-    const memories = args.memoryProvider
-      ? await args.memoryProvider.recall({
+    const requestedMemoryMode = args.memory?.mode || (memoryProvider ? 'explicit' : 'off');
+    const effectiveMemoryMode = resolveMemoryMode({
+      mode: requestedMemoryMode,
+      hasProvider: Boolean(memoryProvider),
+      hasNativeEvidenceReader: Boolean(args.adapter.readNativeMemoryEvidence),
+      supportsNativeMemory: args.adapter.capabilities().nativeMemoryIntegration,
+    });
+
+    if (requestedMemoryMode === 'native' && effectiveMemoryMode === 'native') {
+      yield { type: 'log', message: 'Using native runtime memory integration.' };
+    }
+
+    const memories = effectiveMemoryMode === 'explicit' && memoryProvider
+      ? await memoryProvider.recall({
         query: args.question,
         session: binding,
-        limit: args.recallLimit,
+        limit: args.memory?.recallLimit ?? args.recallLimit,
+        targetUri: args.memory?.targetUri,
         metadata: args.metadata,
       })
       : null;
@@ -193,6 +226,7 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
       if (snapshot.finished) seenEnds.add(snapshot.id);
     }
 
+    const startedAt = Date.now();
     const sendPromise = args.adapter.sendTask({
       sessionId: runtimeSession.id,
       modelId: args.modelId,
@@ -200,7 +234,6 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
       metadata: args.metadata,
     });
 
-    const startedAt = Date.now();
     let task: Awaited<typeof sendPromise> | null = null;
     let sendError: unknown = null;
 
@@ -240,6 +273,19 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
     for (const event of finalEvents) yield event;
 
     const result = args.adapter.buildResult({ task: task!, messages: finalMessages });
+    const nativeMemories = effectiveMemoryMode === 'native' && args.adapter.readNativeMemoryEvidence
+      ? await args.adapter.readNativeMemoryEvidence({
+        sessionId: runtimeSession.id,
+        task: task!,
+        messages: finalMessages,
+        query: args.question,
+        startedAt,
+      })
+      : null;
+    if (nativeMemories && nativeMemories.count > 0) {
+      yield { type: 'memory_recalled', evidence: nativeMemories };
+    }
+
     const assistantMessage = await args.store.appendMessage({
       sessionId: session.id,
       role: 'assistant',

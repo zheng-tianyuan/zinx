@@ -2,13 +2,21 @@ import type {
   AgentEvent,
   AgentRuntimeKind,
   ChatStore,
+  McpManifest,
+  McpMode,
+  McpProvider,
   MemoryMode,
   MemoryProvider,
   MemoryRecallEvidence,
   RuntimeAdapter,
   SessionBinding,
+  SkillManifest,
+  SkillMode,
+  SkillProvider,
   ToolCallSnapshot,
 } from './types.js';
+import { buildMcpManifest, renderMcpManifestForPrompt } from './mcp.js';
+import { buildSkillManifest, renderSkillManifestForPrompt } from './skills.js';
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -82,9 +90,33 @@ function resolveMemoryMode(args: {
   return 'off';
 }
 
+function resolveSkillMode(args: {
+  mode: SkillMode;
+  hasProvider: boolean;
+  supportsNativeSkills: boolean;
+}): SkillMode {
+  if (args.mode !== 'auto') return args.mode;
+  if (args.supportsNativeSkills) return 'native';
+  if (args.hasProvider) return 'prompt';
+  return 'off';
+}
+
+function resolveMcpMode(args: {
+  mode: McpMode;
+  hasProvider: boolean;
+  supportsNativeMcp: boolean;
+}): McpMode {
+  if (args.mode !== 'auto') return args.mode;
+  if (args.supportsNativeMcp) return 'native';
+  if (args.hasProvider) return 'manifest';
+  return 'off';
+}
+
 export function defaultPromptBuilder(args: {
   question: string;
   memories: MemoryRecallEvidence | null;
+  skills?: SkillManifest | null;
+  mcp?: McpManifest | null;
 }): string {
   const memoryText = args.memories?.memories.length
     ? [
@@ -98,8 +130,26 @@ export function defaultPromptBuilder(args: {
     ].join('\n')
     : '';
 
+  const skillText = args.skills?.skills.length
+    ? [
+      'Runtime skills:',
+      renderSkillManifestForPrompt(args.skills),
+      '',
+    ].join('\n')
+    : '';
+
+  const mcpText = args.mcp && (args.mcp.tools.length > 0 || args.mcp.resources.length > 0)
+    ? [
+      'MCP capabilities:',
+      renderMcpManifestForPrompt(args.mcp),
+      '',
+    ].join('\n')
+    : '';
+
   return [
     memoryText,
+    skillText,
+    mcpText,
     'User question:',
     args.question,
   ].filter(Boolean).join('\n');
@@ -117,6 +167,16 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
     recallLimit?: number;
     targetUri?: string;
   };
+  skills?: {
+    mode?: SkillMode;
+    provider?: SkillProvider;
+    names?: string[];
+  };
+  mcp?: {
+    mode?: McpMode;
+    provider?: McpProvider;
+    serverId?: string;
+  };
   chatSessionId?: string;
   requestedRuntimeSessionId?: string;
   title?: string;
@@ -127,6 +187,8 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
   buildPrompt?: (args: {
     question: string;
     memories: MemoryRecallEvidence | null;
+    skills: SkillManifest | null;
+    mcp: McpManifest | null;
     binding: SessionBinding;
   }) => string;
 }): AsyncGenerator<AgentEvent> {
@@ -183,12 +245,27 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
         : `Created runtime session ${runtimeSession.id}`,
     };
 
+    const capabilities = args.adapter.capabilities();
     const requestedMemoryMode = args.memory?.mode || (memoryProvider ? 'explicit' : 'off');
     const effectiveMemoryMode = resolveMemoryMode({
       mode: requestedMemoryMode,
       hasProvider: Boolean(memoryProvider),
       hasNativeEvidenceReader: Boolean(args.adapter.readNativeMemoryEvidence),
-      supportsNativeMemory: args.adapter.capabilities().nativeMemoryIntegration,
+      supportsNativeMemory: capabilities.nativeMemoryIntegration,
+    });
+
+    const requestedSkillMode = args.skills?.mode || (args.skills?.provider ? 'auto' : 'off');
+    const effectiveSkillMode = resolveSkillMode({
+      mode: requestedSkillMode,
+      hasProvider: Boolean(args.skills?.provider),
+      supportsNativeSkills: Boolean(capabilities.nativeSkillIntegration),
+    });
+
+    const requestedMcpMode = args.mcp?.mode || (args.mcp?.provider ? 'auto' : 'off');
+    const effectiveMcpMode = resolveMcpMode({
+      mode: requestedMcpMode,
+      hasProvider: Boolean(args.mcp?.provider),
+      supportsNativeMcp: Boolean(capabilities.nativeMcpIntegration),
     });
 
     if (requestedMemoryMode === 'native' && effectiveMemoryMode === 'native') {
@@ -209,9 +286,38 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
       yield { type: 'memory_recalled', evidence: memories };
     }
 
+    const skillManifest = effectiveSkillMode !== 'off' && args.skills?.provider
+      ? await buildSkillManifest({
+        provider: args.skills.provider,
+        names: args.skills.names,
+        metadata: args.metadata,
+      })
+      : null;
+
+    const mcpManifest = effectiveMcpMode !== 'off' && args.mcp?.provider
+      ? await buildMcpManifest({
+        provider: args.mcp.provider,
+        serverId: args.mcp.serverId,
+        metadata: args.metadata,
+      })
+      : null;
+
+    if (args.adapter.prepareRuntimeAssets) {
+      await args.adapter.prepareRuntimeAssets({
+        session: runtimeSession,
+        skills: skillManifest,
+        mcp: mcpManifest,
+        skillMode: effectiveSkillMode,
+        mcpMode: effectiveMcpMode,
+        metadata: args.metadata,
+      });
+    }
+
+    const promptSkills = effectiveSkillMode === 'prompt' ? skillManifest : null;
+    const promptMcp = effectiveMcpMode === 'manifest' ? mcpManifest : null;
     const prompt = args.buildPrompt
-      ? args.buildPrompt({ question: args.question, memories, binding })
-      : defaultPromptBuilder({ question: args.question, memories });
+      ? args.buildPrompt({ question: args.question, memories, skills: promptSkills, mcp: promptMcp, binding })
+      : defaultPromptBuilder({ question: args.question, memories, skills: promptSkills, mcp: promptMcp });
 
     yield { type: 'progress', phase: 'Runtime is processing the task...' };
 

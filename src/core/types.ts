@@ -1,4 +1,4 @@
-export type AgentRuntimeKind = 'opencode' | 'cursor' | 'codex' | 'mock' | (string & {});
+export type AgentRuntimeKind = 'opencode' | 'cursor' | 'codex' | 'gemini' | 'mock' | (string & {});
 
 export type RuntimeSession = {
   id: string;
@@ -22,6 +22,7 @@ export type RuntimeCapabilities = {
   sessionListing: boolean;
   taskCancellation: boolean;
   nativeMemoryIntegration: boolean;
+  nativeSkillIntegration?: boolean;
   nativeMcpIntegration?: boolean;
 };
 
@@ -81,6 +82,35 @@ export type MemoryRecallEvidence = {
 };
 
 export type MemoryMode = 'auto' | 'explicit' | 'native' | 'off';
+export type SkillMode = 'auto' | 'native' | 'prompt' | 'off';
+export type McpMode = 'auto' | 'native' | 'manifest' | 'off';
+
+export type SkillFile = {
+  path: string;
+  content: string;
+};
+
+export type SkillBundle = {
+  name: string;
+  description?: string;
+  content: string;
+  files?: SkillFile[];
+  trigger?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type SkillManifest = {
+  provider: string;
+  skills: SkillBundle[];
+};
+
+export interface SkillProvider {
+  readonly kind: string;
+  listSkills(args?: {
+    names?: string[];
+    metadata?: Record<string, unknown>;
+  }): Promise<SkillBundle[]>;
+}
 
 export type McpTransportKind = 'stdio' | 'http' | 'sse' | 'websocket' | (string & {});
 
@@ -165,6 +195,14 @@ export interface RuntimeAdapter<TRawMessage = unknown, TRawTask = unknown> {
   listMessages(args: { sessionId: string }): Promise<TRawMessage[]>;
   extractToolSnapshots(messages: TRawMessage[]): ToolCallSnapshot[];
   buildResult(args: { task: TaskHandle<TRawTask>; messages: TRawMessage[] }): RuntimeTaskResult;
+  prepareRuntimeAssets?(args: {
+    session: RuntimeSession;
+    skills?: SkillManifest | null;
+    mcp?: McpManifest | null;
+    skillMode: SkillMode;
+    mcpMode: McpMode;
+    metadata?: Record<string, unknown>;
+  }): Promise<void>;
   readNativeMemoryEvidence?(args: {
     sessionId: string;
     task: TaskHandle<TRawTask>;

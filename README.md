@@ -11,7 +11,7 @@ It is designed around two layers:
 
 Different coding agents expose different session models, message shapes, tool logs, and streaming behavior. `zinx` keeps those differences behind adapters so product code can consume one event stream.
 
-Memory is intentionally handled as a sidecar provider. The orchestrator supports both explicit SDK recall and native runtime memory plugins, so portable runtimes can use prompt injection while runtimes such as OpenCode can use a faster plugin path.
+Memory, skills, and MCP are intentionally handled as sidecar providers. The orchestrator supports both explicit SDK recall and native runtime integrations, so portable runtimes can use prompt injection while runtimes such as OpenCode can use a faster plugin path.
 
 ## Install
 
@@ -54,6 +54,22 @@ const adapter = new OpenCodeRuntimeAdapter({
 ```
 
 `zinx` does not ship credentials. Pass endpoint URLs, model ids, and API keys from your own application configuration.
+
+## Gemini Adapter
+
+`GeminiRuntimeAdapter` wraps the Gemini CLI stream-json mode and normalizes text, tool calls, tool results, and cancellation.
+
+```ts
+import { GeminiRuntimeAdapter } from 'zinx';
+
+const adapter = new GeminiRuntimeAdapter({
+  executable: 'gemini',
+  cwd: '/path/to/repositories',
+  timeoutMs: 20 * 60 * 1000,
+});
+```
+
+The adapter runs `gemini -p <prompt> -o stream-json --yolo` by default. Credentials and model access stay in your own Gemini CLI environment.
 
 ## OpenViking Memory Provider
 
@@ -124,11 +140,70 @@ const manifest = await buildMcpManifest({ provider: mcpProvider });
 const promptTools = renderMcpManifestForPrompt(manifest);
 ```
 
+`streamChatTurn()` can do this automatically:
+
+```ts
+for await (const event of streamChatTurn({
+  question: 'Compare this release with our integration code',
+  adapter,
+  store,
+  mcp: {
+    mode: 'auto',
+    provider: mcpProvider,
+  },
+})) {
+  console.log(event);
+}
+```
+
+MCP modes:
+
+- `auto`: use native runtime MCP when available, otherwise render a manifest into the prompt.
+- `native`: rely on the runtime to mount MCP servers directly.
+- `manifest`: render MCP tools/resources into the prompt.
+- `off`: do not use MCP.
+
 Recommended runtime behavior:
 
 - OpenCode or other runtimes with native MCP support can mount the MCP server directly.
 - Cursor/Codex or runtimes without native MCP support can receive `renderMcpManifestForPrompt()` output as a tool manifest.
 - Product code should depend on `McpProvider`, not on any one runtime's MCP config format.
+
+## Skill Providers
+
+Skills follow the same provider pattern as MCP. They are portable `SkillBundle` objects that can be mounted natively by a runtime or rendered into the prompt for runtimes without native skill support.
+
+```ts
+import { StaticSkillProvider, streamChatTurn } from 'zinx';
+
+const skillProvider = new StaticSkillProvider({
+  skills: [{
+    name: 'release-impact-review',
+    description: 'Analyze upstream release notes against a local integration.',
+    trigger: 'Use when the user asks what a dependency release changes for their codebase.',
+    content: 'Read the release notes, inspect integration code, and summarize behavior changes and risks.',
+  }],
+});
+
+for await (const event of streamChatTurn({
+  question: 'What does the new TON release change for global-scan?',
+  adapter,
+  store,
+  skills: {
+    mode: 'auto',
+    provider: skillProvider,
+  },
+})) {
+  console.log(event);
+}
+```
+
+Skill modes:
+
+- `auto`: use native runtime skills when available, otherwise inject skills into the prompt.
+- `native`: rely on the runtime's skill loader.
+- `prompt`: render skill instructions into the prompt.
+- `off`: do not use skills.
 
 ## Core Events
 
@@ -147,8 +222,10 @@ This package currently includes:
 - Core runtime and memory interfaces.
 - A generic chat/task orchestrator.
 - A self-contained OpenCode HTTP adapter.
+- A Gemini CLI adapter.
 - A generic OpenViking HTTP memory provider.
 - Generic MCP provider types, manifest helpers, and a static MCP provider.
+- Generic skill provider types, manifest helpers, and a static skill provider.
 - An in-memory store for tests and examples.
 - Cursor and Codex minimum capability specs.
 

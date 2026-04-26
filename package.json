@@ -24,12 +24,16 @@
     "runtime",
     "sdk",
     "opencode",
+    "gemini",
     "cursor",
     "codex",
-    "memory"
+    "memory",
+    "mcp",
+    "skills"
   ],
   "license": "MIT",
   "devDependencies": {
+    "@types/node": "^25.6.0",
     "typescript": "^5.0.0"
   }
 }

@@ -22,6 +22,7 @@ export type RuntimeCapabilities = {
   sessionListing: boolean;
   taskCancellation: boolean;
   nativeMemoryIntegration: boolean;
+  nativeMcpIntegration?: boolean;
 };
 
 export type RuntimeToolStep = {
@@ -80,6 +81,69 @@ export type MemoryRecallEvidence = {
 };
 
 export type MemoryMode = 'auto' | 'explicit' | 'native' | 'off';
+
+export type McpTransportKind = 'stdio' | 'http' | 'sse' | 'websocket' | (string & {});
+
+export type McpServerRef = {
+  id: string;
+  name?: string;
+  transport?: McpTransportKind;
+  endpoint?: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  metadata?: Record<string, unknown>;
+};
+
+export type McpTool = {
+  id: string;
+  name: string;
+  description?: string;
+  server?: McpServerRef;
+  inputSchema?: Record<string, unknown>;
+  annotations?: Record<string, unknown>;
+};
+
+export type McpResource = {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+  server?: McpServerRef;
+  metadata?: Record<string, unknown>;
+};
+
+export type McpManifest = {
+  provider: string;
+  servers: McpServerRef[];
+  tools: McpTool[];
+  resources: McpResource[];
+};
+
+export type McpToolCallResult = {
+  provider: string;
+  serverId?: string;
+  toolName: string;
+  result: unknown;
+  raw?: unknown;
+};
+
+export interface McpProvider {
+  readonly kind: string;
+  listServers(args?: { metadata?: Record<string, unknown> }): Promise<McpServerRef[]>;
+  listTools(args?: { serverId?: string; metadata?: Record<string, unknown> }): Promise<McpTool[]>;
+  listResources(args?: { serverId?: string; metadata?: Record<string, unknown> }): Promise<McpResource[]>;
+  callTool?(args: {
+    serverId?: string;
+    toolName: string;
+    input?: unknown;
+    metadata?: Record<string, unknown>;
+  }): Promise<McpToolCallResult>;
+  readResource?(args: {
+    uri: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<unknown>;
+}
 
 export type AgentEvent =
   | { type: 'session_bound'; binding: SessionBinding }

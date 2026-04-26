@@ -94,6 +94,42 @@ for await (const event of streamChatTurn({
 
 For native memory evidence, adapters can implement `readNativeMemoryEvidence()`. The OpenCode adapter accepts a `readNativeMemoryEvidence` callback so applications can bridge their own plugin state or logs without coupling `zinx` to a specific local file layout.
 
+## MCP Providers
+
+MCP is also abstracted behind a provider interface. Product code can list tools and resources once, then let each runtime decide whether to mount MCP natively or receive a rendered manifest in the prompt.
+
+```ts
+import {
+  StaticMcpProvider,
+  buildMcpManifest,
+  renderMcpManifestForPrompt,
+} from 'zinx';
+
+const mcpProvider = new StaticMcpProvider({
+  servers: [{ id: 'docs', name: 'Documentation MCP', transport: 'http' }],
+  tools: [{
+    id: 'docs.search',
+    name: 'search_docs',
+    description: 'Search internal documentation.',
+    server: { id: 'docs' },
+    inputSchema: {
+      type: 'object',
+      properties: { query: { type: 'string' } },
+      required: ['query'],
+    },
+  }],
+});
+
+const manifest = await buildMcpManifest({ provider: mcpProvider });
+const promptTools = renderMcpManifestForPrompt(manifest);
+```
+
+Recommended runtime behavior:
+
+- OpenCode or other runtimes with native MCP support can mount the MCP server directly.
+- Cursor/Codex or runtimes without native MCP support can receive `renderMcpManifestForPrompt()` output as a tool manifest.
+- Product code should depend on `McpProvider`, not on any one runtime's MCP config format.
+
 ## Core Events
 
 - `session_bound`
@@ -112,6 +148,7 @@ This package currently includes:
 - A generic chat/task orchestrator.
 - A self-contained OpenCode HTTP adapter.
 - A generic OpenViking HTTP memory provider.
+- Generic MCP provider types, manifest helpers, and a static MCP provider.
 - An in-memory store for tests and examples.
 - Cursor and Codex minimum capability specs.
 

@@ -209,12 +209,65 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
       metadata: args.metadata,
     });
 
+    const capabilities = args.adapter.capabilities();
+    const memoryProvider = args.memory?.provider || args.memoryProvider;
+    const requestedMemoryMode = args.memory?.mode || (memoryProvider ? 'explicit' : 'off');
+    const effectiveMemoryMode = resolveMemoryMode({
+      mode: requestedMemoryMode,
+      hasProvider: Boolean(memoryProvider),
+      hasNativeEvidenceReader: Boolean(args.adapter.readNativeMemoryEvidence),
+      supportsNativeMemory: capabilities.nativeMemoryIntegration,
+    });
+
+    const requestedSkillMode = args.skills?.mode || (args.skills?.provider ? 'auto' : 'off');
+    const effectiveSkillMode = resolveSkillMode({
+      mode: requestedSkillMode,
+      hasProvider: Boolean(args.skills?.provider),
+      supportsNativeSkills: Boolean(capabilities.nativeSkillIntegration),
+    });
+
+    const requestedMcpMode = args.mcp?.mode || (args.mcp?.provider ? 'auto' : 'off');
+    const effectiveMcpMode = resolveMcpMode({
+      mode: requestedMcpMode,
+      hasProvider: Boolean(args.mcp?.provider),
+      supportsNativeMcp: Boolean(capabilities.nativeMcpIntegration),
+    });
+
+    const skillManifest = effectiveSkillMode !== 'off' && args.skills?.provider
+      ? await buildSkillManifest({
+        provider: args.skills.provider,
+        names: args.skills.names,
+        metadata: args.metadata,
+      })
+      : null;
+
+    const mcpManifest = effectiveMcpMode !== 'off' && args.mcp?.provider
+      ? await buildMcpManifest({
+        provider: args.mcp.provider,
+        serverId: args.mcp.serverId,
+        metadata: args.metadata,
+      })
+      : null;
+
     const existingBinding = await args.store.getSessionBinding(session.id);
     const runtimeSessionId = args.requestedRuntimeSessionId || existingBinding?.runtimeSessionId;
+    if (args.adapter.prepareRuntimeAssets) {
+      await args.adapter.prepareRuntimeAssets({
+        session: {
+          id: runtimeSessionId || '',
+          runtime: args.adapter.kind,
+          resumed: Boolean(runtimeSessionId),
+        },
+        skills: skillManifest,
+        mcp: mcpManifest,
+        skillMode: effectiveSkillMode,
+        mcpMode: effectiveMcpMode,
+        metadata: args.metadata,
+      });
+    }
     const runtimeSession = runtimeSessionId
       ? await args.adapter.resumeSession({ sessionId: runtimeSessionId })
       : await args.adapter.createSession({ title: args.title || args.question, metadata: args.metadata });
-    const memoryProvider = args.memory?.provider || args.memoryProvider;
 
     let binding = makeBinding({
       chatSessionId: session.id,
@@ -245,29 +298,6 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
         : `Created runtime session ${runtimeSession.id}`,
     };
 
-    const capabilities = args.adapter.capabilities();
-    const requestedMemoryMode = args.memory?.mode || (memoryProvider ? 'explicit' : 'off');
-    const effectiveMemoryMode = resolveMemoryMode({
-      mode: requestedMemoryMode,
-      hasProvider: Boolean(memoryProvider),
-      hasNativeEvidenceReader: Boolean(args.adapter.readNativeMemoryEvidence),
-      supportsNativeMemory: capabilities.nativeMemoryIntegration,
-    });
-
-    const requestedSkillMode = args.skills?.mode || (args.skills?.provider ? 'auto' : 'off');
-    const effectiveSkillMode = resolveSkillMode({
-      mode: requestedSkillMode,
-      hasProvider: Boolean(args.skills?.provider),
-      supportsNativeSkills: Boolean(capabilities.nativeSkillIntegration),
-    });
-
-    const requestedMcpMode = args.mcp?.mode || (args.mcp?.provider ? 'auto' : 'off');
-    const effectiveMcpMode = resolveMcpMode({
-      mode: requestedMcpMode,
-      hasProvider: Boolean(args.mcp?.provider),
-      supportsNativeMcp: Boolean(capabilities.nativeMcpIntegration),
-    });
-
     if (requestedMemoryMode === 'native' && effectiveMemoryMode === 'native') {
       yield { type: 'log', message: 'Using native runtime memory integration.' };
     }
@@ -285,22 +315,6 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
     if (memories && memories.count > 0) {
       yield { type: 'memory_recalled', evidence: memories };
     }
-
-    const skillManifest = effectiveSkillMode !== 'off' && args.skills?.provider
-      ? await buildSkillManifest({
-        provider: args.skills.provider,
-        names: args.skills.names,
-        metadata: args.metadata,
-      })
-      : null;
-
-    const mcpManifest = effectiveMcpMode !== 'off' && args.mcp?.provider
-      ? await buildMcpManifest({
-        provider: args.mcp.provider,
-        serverId: args.mcp.serverId,
-        metadata: args.metadata,
-      })
-      : null;
 
     if (args.adapter.prepareRuntimeAssets) {
       await args.adapter.prepareRuntimeAssets({

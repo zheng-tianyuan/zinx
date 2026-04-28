@@ -1,4 +1,4 @@
-export type AgentRuntimeKind = 'opencode' | 'cursor' | 'codex' | 'gemini' | 'mock' | (string & {});
+export type AgentRuntimeKind = 'acp' | 'opencode' | 'cursor' | 'codex' | 'gemini' | 'mock' | (string & {});
 
 export type RuntimeSession = {
   id: string;
@@ -84,6 +84,90 @@ export type MemoryRecallEvidence = {
 export type MemoryMode = 'auto' | 'explicit' | 'native' | 'off';
 export type SkillMode = 'auto' | 'native' | 'prompt' | 'off';
 export type McpMode = 'auto' | 'native' | 'manifest' | 'off';
+export type AgentTaskStatus = 'draft' | 'queued' | 'running' | 'blocked' | 'succeeded' | 'failed' | 'cancelled';
+export type AgentTaskEventType =
+  | 'log'
+  | 'progress'
+  | 'step_started'
+  | 'step_finished'
+  | 'partial_text'
+  | 'final_text'
+  | 'error';
+
+export type AgentTaskSpec = {
+  id?: string;
+  title: string;
+  description?: string;
+  type?: string;
+  prompt: string;
+  runtimeKind?: AgentRuntimeKind;
+  modelId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type AgentTaskRuntimeContext = {
+  task: AgentTaskSpec;
+  status: AgentTaskStatus;
+  runId?: string;
+  startedAt?: number;
+  metadata?: Record<string, unknown>;
+};
+
+export type AgentTaskLifecycleEvent = {
+  type: AgentTaskEventType;
+  message?: string;
+  data?: unknown;
+  elapsedMs?: number;
+};
+
+export interface AgentTaskSink {
+  onStatus?(status: AgentTaskStatus, context: AgentTaskRuntimeContext): Promise<void> | void;
+  onEvent?(event: AgentTaskLifecycleEvent, context: AgentTaskRuntimeContext): Promise<void> | void;
+  onArtifact?(artifact: {
+    type: string;
+    title: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+  }, context: AgentTaskRuntimeContext): Promise<void> | void;
+}
+
+export type CollaborationResource = {
+  id: string;
+  type: string;
+  title?: string;
+  url?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export type CollaborationCapability = {
+  id: string;
+  name: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+};
+
+export interface CollaborationProvider {
+  readonly kind: string;
+  health(args?: { metadata?: Record<string, unknown> }): Promise<{
+    ok: boolean;
+    message?: string;
+    raw?: unknown;
+  }>;
+  listCapabilities(args?: { metadata?: Record<string, unknown> }): Promise<CollaborationCapability[]>;
+  resolveResource?(args: {
+    urlOrId: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<CollaborationResource | null>;
+}
+
+export type CliBinding = {
+  id: string;
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  cwd?: string;
+  metadata?: Record<string, unknown>;
+};
 
 export type SkillFile = {
   path: string;

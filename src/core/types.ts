@@ -45,6 +45,7 @@ export type RuntimeTaskRequest = {
   modelId?: string;
   prompt: string;
   metadata?: Record<string, unknown>;
+  signal?: AbortSignal;
 };
 
 export type TaskHandle<TRawTask = unknown> = {
@@ -279,6 +280,22 @@ export interface RuntimeAdapter<TRawMessage = unknown, TRawTask = unknown> {
   listMessages(args: { sessionId: string }): Promise<TRawMessage[]>;
   extractToolSnapshots(messages: TRawMessage[]): ToolCallSnapshot[];
   buildResult(args: { task: TaskHandle<TRawTask>; messages: TRawMessage[] }): RuntimeTaskResult;
+  prepareRuntimeAssetsBeforeSession?(args: {
+    session?: RuntimeSession;
+    skills?: SkillManifest | null;
+    mcp?: McpManifest | null;
+    skillMode: SkillMode;
+    mcpMode: McpMode;
+    metadata?: Record<string, unknown>;
+  }): Promise<void>;
+  prepareRuntimeAssetsAfterSession?(args: {
+    session: RuntimeSession;
+    skills?: SkillManifest | null;
+    mcp?: McpManifest | null;
+    skillMode: SkillMode;
+    mcpMode: McpMode;
+    metadata?: Record<string, unknown>;
+  }): Promise<void>;
   prepareRuntimeAssets?(args: {
     session: RuntimeSession;
     skills?: SkillManifest | null;

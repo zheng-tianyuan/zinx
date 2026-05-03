@@ -22,6 +22,42 @@ function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function abortError() {
+  return new Error('Operation aborted');
+}
+
+async function sleepWithSignal(ms: number, signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError();
+  return new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function throwIfAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw abortError();
+}
+
+function combineSignals(signals: Array<AbortSignal | undefined>) {
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (active.length === 0) return undefined;
+  if (active.length === 1) return active[0];
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  for (const signal of active) {
+    if (signal.aborted) {
+      controller.abort();
+      break;
+    }
+    signal.addEventListener('abort', abort, { once: true });
+  }
+  return controller.signal;
+}
+
 function formatToolOutput(output: unknown): string {
   if (typeof output === 'string') return output;
   if (output === undefined || output === null) return '';
@@ -184,6 +220,8 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
   recallLimit?: number;
   pollIntervalMs?: number;
   toolOutputLimit?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal;
   buildPrompt?: (args: {
     question: string;
     memories: MemoryRecallEvidence | null;
@@ -193,8 +231,15 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
   }) => string;
 }): AsyncGenerator<AgentEvent> {
   let persistedSessionId: string | undefined;
+  const timeoutController = args.timeoutMs ? new AbortController() : null;
+  let timeout: NodeJS.Timeout | undefined;
+  if (timeoutController) {
+    timeout = setTimeout(() => timeoutController.abort(), args.timeoutMs);
+  }
+  const effectiveSignal = combineSignals([args.signal, timeoutController?.signal]);
 
   try {
+    throwIfAborted(effectiveSignal);
     const session = await args.store.ensureSession({
       chatSessionId: args.chatSessionId,
       title: args.title || args.question,
@@ -251,7 +296,20 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
 
     const existingBinding = await args.store.getSessionBinding(session.id);
     const runtimeSessionId = args.requestedRuntimeSessionId || existingBinding?.runtimeSessionId;
-    if (args.adapter.prepareRuntimeAssets) {
+    if (args.adapter.prepareRuntimeAssetsBeforeSession) {
+      await args.adapter.prepareRuntimeAssetsBeforeSession({
+        session: runtimeSessionId ? {
+          id: runtimeSessionId,
+          runtime: args.adapter.kind,
+          resumed: true,
+        } : undefined,
+        skills: skillManifest,
+        mcp: mcpManifest,
+        skillMode: effectiveSkillMode,
+        mcpMode: effectiveMcpMode,
+        metadata: args.metadata,
+      });
+    } else if (args.adapter.prepareRuntimeAssets) {
       await args.adapter.prepareRuntimeAssets({
         session: {
           id: runtimeSessionId || '',
@@ -265,6 +323,7 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
         metadata: args.metadata,
       });
     }
+    throwIfAborted(effectiveSignal);
     const runtimeSession = runtimeSessionId
       ? await args.adapter.resumeSession({ sessionId: runtimeSessionId })
       : await args.adapter.createSession({ title: args.title || args.question, metadata: args.metadata });
@@ -316,7 +375,16 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
       yield { type: 'memory_recalled', evidence: memories };
     }
 
-    if (args.adapter.prepareRuntimeAssets) {
+    if (args.adapter.prepareRuntimeAssetsAfterSession) {
+      await args.adapter.prepareRuntimeAssetsAfterSession({
+        session: runtimeSession,
+        skills: skillManifest,
+        mcp: mcpManifest,
+        skillMode: effectiveSkillMode,
+        mcpMode: effectiveMcpMode,
+        metadata: args.metadata,
+      });
+    } else if (args.adapter.prepareRuntimeAssets) {
       await args.adapter.prepareRuntimeAssets({
         session: runtimeSession,
         skills: skillManifest,
@@ -347,11 +415,13 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
     }
 
     const startedAt = Date.now();
+    throwIfAborted(effectiveSignal);
     const sendPromise = args.adapter.sendTask({
       sessionId: runtimeSession.id,
       modelId: args.modelId,
       prompt,
       metadata: args.metadata,
+      signal: effectiveSignal,
     });
 
     let task: Awaited<typeof sendPromise> | null = null;
@@ -363,6 +433,7 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
     );
 
     while (!task && !sendError) {
+      throwIfAborted(effectiveSignal);
       const polledMessages = await args.adapter.listMessages({
         sessionId: runtimeSession.id,
       }).catch(() => [] as TRawMessage[]);
@@ -378,7 +449,7 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
         phase: events.length > 0 ? 'Runtime is executing tools...' : 'Runtime is reading context...',
         elapsedMs: Date.now() - startedAt,
       };
-      await sleep(args.pollIntervalMs ?? 1200);
+      await sleepWithSignal(args.pollIntervalMs ?? 1200, effectiveSignal);
     }
 
     if (sendError) throw sendError;
@@ -441,5 +512,7 @@ export async function* streamChatTurn<TRawMessage, TRawTask>(args: {
       type: 'error',
       message: error instanceof Error ? error.message : String(error),
     };
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }

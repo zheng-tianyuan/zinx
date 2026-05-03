@@ -32,6 +32,8 @@ export type RunAgentTaskArgs<TRawMessage, TRawTask> = {
   };
   buildPrompt?: (task: AgentTaskSpec) => string;
   shouldCancel?: () => boolean | Promise<boolean>;
+  timeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 export async function runAgentTask<TRawMessage, TRawTask>(args: RunAgentTaskArgs<TRawMessage, TRawTask>): Promise<{
@@ -51,6 +53,11 @@ export async function runAgentTask<TRawMessage, TRawTask>(args: RunAgentTaskArgs
 
   let content = '';
   let runtimeSessionId: string | undefined;
+  let runtimeError: string | null = null;
+  const controller = new AbortController();
+  const abortFromExternal = () => controller.abort();
+  args.signal?.addEventListener('abort', abortFromExternal, { once: true });
+  const timeout = args.timeoutMs ? setTimeout(() => controller.abort(), args.timeoutMs) : undefined;
 
   try {
     for await (const event of streamChatTurn({
@@ -72,9 +79,12 @@ export async function runAgentTask<TRawMessage, TRawTask>(args: RunAgentTaskArgs
       } : undefined,
       title: args.task.title,
       metadata: args.task.metadata,
+      timeoutMs: args.timeoutMs,
+      signal: controller.signal,
       buildPrompt: args.buildPrompt ? () => args.buildPrompt!(args.task) : undefined,
     })) {
       if (await args.shouldCancel?.()) {
+        controller.abort();
         await args.sink?.onStatus?.('cancelled', { ...context, status: 'cancelled' });
         return { status: 'cancelled', content, runtimeSessionId };
       }
@@ -83,8 +93,18 @@ export async function runAgentTask<TRawMessage, TRawTask>(args: RunAgentTaskArgs
         content = event.content;
         runtimeSessionId = event.sessionId;
       }
+      if (event.type === 'error') {
+        runtimeError = event.message;
+      }
 
       await args.sink?.onEvent?.(mapAgentEvent(event), context);
+    }
+
+    if (runtimeError) {
+      throw new Error(runtimeError);
+    }
+    if (!content.trim()) {
+      throw new Error('Agent returned empty output.');
     }
 
     await args.sink?.onArtifact?.({
@@ -100,6 +120,9 @@ export async function runAgentTask<TRawMessage, TRawTask>(args: RunAgentTaskArgs
     await args.sink?.onEvent?.({ type: 'error', message, data: { error: message } }, context);
     await args.sink?.onStatus?.('failed', { ...context, status: 'failed' });
     return { status: 'failed', content: message, runtimeSessionId };
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    args.signal?.removeEventListener('abort', abortFromExternal);
   }
 }
 

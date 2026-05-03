@@ -66,6 +66,9 @@ export class MockRuntimeAdapter implements RuntimeAdapter<MockMessage, MockTask>
   }
 
   async sendTask(args: RuntimeTaskRequest): Promise<TaskHandle<MockTask>> {
+    if (args.signal?.aborted) {
+      throw new Error('Operation aborted');
+    }
     const messages = this.sessions.get(args.sessionId) || [];
     const parentId = `task_${++this.sequence}`;
     const content = this.responder(args.prompt);

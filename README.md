@@ -35,10 +35,13 @@ for await (const event of streamChatTurn({
   question: 'Explain how this service handles retries',
   adapter,
   store,
+  timeoutMs: 20 * 60 * 1000,
 })) {
   console.log(event);
 }
 ```
+
+Pass `signal` when the host app needs to cancel a turn. The orchestrator forwards the signal to adapters that support abortable execution and emits an `error` event if the runtime aborts or times out.
 
 ## OpenCode Adapter
 
@@ -214,6 +217,46 @@ Skill modes:
 - `partial_text`
 - `final_text`
 - `error`
+
+## Runtime Asset Hooks
+
+Adapters that need runtime assets such as MCP servers or skill manifests can prepare them in two phases:
+
+```ts
+const adapter = {
+  // ...RuntimeAdapter implementation
+  async prepareRuntimeAssetsBeforeSession(args) {
+    // Called before createSession/resumeSession. Use this for runtimes that
+    // need MCP/skill config available during session initialization.
+  },
+  async prepareRuntimeAssetsAfterSession(args) {
+    // Called after the real runtime session id is known.
+  },
+};
+```
+
+Existing adapters can continue implementing `prepareRuntimeAssets()`. `zinx` still calls that legacy hook in the same before/after positions for backwards compatibility.
+
+## Task Runner
+
+`runAgentTask()` wraps `streamChatTurn()` for durable task systems. It now treats runtime `error` events and empty final output as failed tasks, which keeps worker queues from marking failed agents as successful.
+
+```ts
+import { runAgentTask } from 'zinx';
+
+const result = await runAgentTask({
+  task: {
+    id: 'task_1',
+    type: 'custom',
+    title: 'Review requirement',
+    prompt: 'Create a design proposal for this requirement.',
+  },
+  adapter,
+  store,
+  timeoutMs: 30 * 60 * 1000,
+  shouldCancel: async () => false,
+});
+```
 
 ## Status
 

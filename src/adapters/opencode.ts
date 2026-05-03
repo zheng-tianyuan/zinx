@@ -61,9 +61,12 @@ async function requestJson<T>(args: {
   url: string;
   init?: RequestInit;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<T> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), args.timeoutMs);
+  const onAbort = () => controller.abort();
+  args.signal?.addEventListener('abort', onAbort, { once: true });
 
   try {
     const response = await args.fetchImpl(args.url, {
@@ -81,6 +84,7 @@ async function requestJson<T>(args: {
     return JSON.parse(text) as T;
   } finally {
     clearTimeout(timeout);
+    args.signal?.removeEventListener('abort', onAbort);
   }
 }
 
@@ -167,6 +171,7 @@ export class OpenCodeRuntimeAdapter implements RuntimeAdapter<OpenCodeMessage, O
         }),
       },
       timeoutMs: this.timeoutMs,
+      signal: args.signal,
     });
 
     if (!payload.info?.parentID) {
